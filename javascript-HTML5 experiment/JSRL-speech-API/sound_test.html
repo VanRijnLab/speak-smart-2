@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>My experiment</title>
+    <script src="jspsych-6/jspsych.js"></script>
+    <script src="jspsych-6/plugins/jspsych-html-keyboard-response.js"></script>
+    <link href="jspsych-6/css/jspsych.css" rel="stylesheet" type="text/css">
+    </link>
+</head>
+
+<body></body>
+<script>
+
+    var trial = {
+        type: 'audio-keyboard-response',
+        stimulus: 'awry.mp3',
+        choices: ['e', 'i'],
+        prompt: "<p>Is the pitch high or low? Press 'e' for low and 'i' for high.</p>",
+        response_ends_trial: false
+    };
+
+    var audio = ['res/audio/awry.mp3'];
+
+    jsPsych.init({
+        timeline: [trial],
+        preload_audio: audio
+    });
+
+</script>
+
+</html>
