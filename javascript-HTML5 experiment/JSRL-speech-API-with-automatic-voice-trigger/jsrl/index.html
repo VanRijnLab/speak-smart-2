@@ -65,38 +65,26 @@
     var materials =  "./res/materials.csv"
  
     // Durations
-    const rl_durationA = 12 * 60000; // 12 minutes 
-    const rl_durationB = 12 * 60000; // 12 minutes (NB: the duration of block C is equal to the duration of block B)
-    const rl_duration_practise = 1 * 60000; // 1 minute
-    const filler_duration = 2 * 60000; // 3 minutes
+    const rl_duration = 4 * 60000; // 12 minutes
+
+  
     const correct_feedback_duration = 1500; // 0.6 seconds
     const almost_correct_feedback_duration = 1500; // 1.2 seconds
     const incorrect_feedback_duration = 4000; // 4 seconds
     const incorrect_feedback_duration_filler = 7000; // 7 seconds
-    const trial_duration = 30000; // automatically advance after 30 seconds
-    const trial_duration_filler = 100000000;
+    const trial_duration = 15000; // automatically advance after 15 seconds
     const max_trial_duration = 30000 // move on to next trial after 30 seconds
 
     // Materials
-    const n_itemsA = 30; // number of items to include in block A
-    const n_items_calcA = 10;
-    const n_itemsB = 30; // number of items to include in block B
-    const n_items_calcB = 10;
-    const n_itemsC = 30; // number of items to include in blcok C
-    const n_items_calcC = 10;
+    const n_items = 30; // number of items to include 
+   
     const shuffle_items = true; // new items are picked randomly
     const shuffle_items_calc = false; //do not shuffle the arithmetic facts as they are presented with increasing difficulty
     const preload_audio = true; // preloading prevents delays
+    
     const permissible_edit_distance = 4
     const default_correct = Boolean(false)
     const default_repeat = Number(0)
-
-    const type_indicator_study = 'study';
-    const type_indicator_test = 'test';
-    const block_indicator_A = 'A';
-    const block_indicator_B = 'B';
-    const block_indicator_C = 'C';
-    const block_indicator_P = 'P';
 
     // Spacing model
     const lookahead_time = 15000;
@@ -111,16 +99,6 @@
     const b_0 = 0.2;
 
     const default_studied = false
-
-    const feedback_controller = {
-        // id: "Microsoft Microsoft SideWinder Plug & Play Game Pad (Vendor: 045e Product: 0027)",
-       // id: "408-10-EventExchanger-RVK01----100408-   ------",
-        button_correct: 0,
-        button_incorrect: 4,
-        button_almost_correct: 1,
-        button_correct_but_ignore: 2
-    };
-    const voice_key_delay = 92.8;
 
     // Experiment setup
  
@@ -207,11 +185,6 @@
     };
 
 
-    //-----------//
-    //  Block A  //
-    //-----------//
-
-
     // Setup
      var rl_setup = {
         type: 'call-function',
@@ -220,7 +193,7 @@
         }
     };
 
-    // Instructions block A
+    // Instructions 
 
     var instructions = {
         type: 'instructions',
@@ -230,28 +203,28 @@
         <p> Press the <kbd>spacebar </kbd> to continue.</p>'],
         key_forward: 'spacebar'
     };
-    // RL trial sequence block A
+    // RL trial sequence 
     var rl_start_time;
 
-    // Initialise timer block A
+    // Initialise timer
     var rl_timer = {
         type: 'call-function',
         func: function () {
             rl_start_time = Date.now();
             rl_timer_ticks = setInterval(function () {
-                var proportion_time_elapsed = (Date.now() - rl_start_time) / rl_durationA;
+                var proportion_time_elapsed = (Date.now() - rl_start_time) / rl_duration;
             }, 100);
         }
     };
 
-    // RL trial block A
+    // RL trial
     var rl_trial = {
         type: "html-speech-API-response",
         correct_feedback_duration: correct_feedback_duration,
         almost_correct_feedback_duration: almost_correct_feedback_duration,
         incorrect_feedback_duration: incorrect_feedback_duration,
         trial_duration: trial_duration,
-        permissible_edit_distance: permissible_edit_distance,language: lang,types: type_indicator_study, block: block_indicator_A,
+        permissible_edit_distance: permissible_edit_distance,
         question: function () {
             return get_next_fact(Date.now()); // calls the function in rl-model.js
         },
@@ -267,7 +240,7 @@
     var loop_rl_trial = {
         timeline: [rl_trial],
         loop_function: function () {
-            if (Date.now() - rl_start_time < rl_durationA) {
+            if (Date.now() - rl_start_time < rl_duration) {
                 return true;
             } else {
                 return false;
@@ -275,14 +248,15 @@
         }
     };
 
-    // Post A Instructions
+    // Complete message
 
     var instructions_post = {
         type: 'instructions',
         pages: ['<h1> Done! </h1> <br>  \
-        <p> Well done! You completed the experiment.'],
+        <p> Well done! You completed the experiment. Press the spacebar to store your data'],
         key_forward: 'spacebar'
     };
+
 
     //---------------------//
     // Experiment timeline //
@@ -313,7 +287,7 @@
         timeline: timeline,
         on_interaction_data_update: check_focus_loss,
         on_finish: function () {
-            save_data("speak_smart_dat" + "_" + participant_number + "cond_" + cond + "lang_" + lang, jsPsych.data.get().csv(), function () {
+            save_data("speak_smart_2" + participant_number, jsPsych.data.get().csv(), function () {
                 document.write('<div class="endscreen" style="text-align:center; border:0px solid; padding:10px; font-size:120%; float:center"><br><p>Done!</p><br><br><p>Thank you very much for your participation. You can close the window.</p></div>')
                 document.close();
             });

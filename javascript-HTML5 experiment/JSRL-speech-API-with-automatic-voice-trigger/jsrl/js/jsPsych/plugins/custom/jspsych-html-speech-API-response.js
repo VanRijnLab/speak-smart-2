@@ -159,7 +159,7 @@ jsPsych.plugins["html-speech-API-response"] = (function () {
         var correct = null;                 // correctness, binary: either true or false 
         var response_time_out;              // did the participant think longer than the permissible timeout?
         var timed_out = false;  
-        var final_response;                   
+        var final_response = [];                   
    
         // speech API:
     
@@ -173,7 +173,7 @@ jsPsych.plugins["html-speech-API-response"] = (function () {
         var check_interval = null;          // to check for results, see below 
 
         var first_attempt_failed = false;   // did the API succesflly return a result, for the first speech utterance?
-
+        var result_returned = false;
         var message = document.querySelector('#message');  // show the result sting directly in the HTML (for developing purposes)
         
         // import grammer 
@@ -186,11 +186,12 @@ jsPsych.plugins["html-speech-API-response"] = (function () {
         var speechRecognitionList = new SpeechGrammarList();
         speechRecognitionList.addFromString(grammar, 1);
         recognition.grammars = speechRecognitionList;
-        recognition.lang = 'en-UK';
+        recognition.lang = 'en-US';
         recognition.interimResults = false;
 
         // function that will be called whenever a speech start signal is detected. 
         recognition.onspeechstart = function(info) {
+            speech_has_started = true;
             voice_key_triggered = true;       
             start_speak_time = Date.now()        
             picture = "url('./res/detected.png')"   
@@ -205,6 +206,7 @@ jsPsych.plugins["html-speech-API-response"] = (function () {
             speech_has_ended = true;  
             API_sent_time = Date.now(); // register the timepoint at which the audio was sent to the API
             start_check_API(); // start to check if a valid result was returned. If not, restart recognition procedure
+
         }
 
         // function that will be called whenever a result is received from the speech API
@@ -214,13 +216,84 @@ jsPsych.plugins["html-speech-API-response"] = (function () {
             message.textContent =  command ;
             console.log('Result succesfully received! Participant spoke: ' + command + '; conf = ' + event.results[0][0].confidence);
             full_results = event.results
+            result_returned = true;
             clearInterval(check_interval)   // stop the check procedure
             show_feedback();                // show feedback
         };  
 
+        // start recognition process!   
+        recognition.start();
+
+        recognition.onerror = function(event) {
+            console.log('Speech recognition error detected: ' + event.error);
+            
+            var voice_key_triggered = false;    // is the voice key triggered (this happens automatically upon speech start)
+            var speech_has_started = false;     // did the speech start?
+            var speech_has_ended = false;       // did the speech end?
+            var command = null;                 // command will contain the transcibed voice sting 
+            var confidence =  null;             // how confident is the API about this transcirption?
+            var full_results = null;            // contains all possible data from the API for the current request
+    
+            var check_interval = null;          // to check for results, see below 
+    
+            var first_attempt_failed = false;   // did the API succesflly return a result, for the first speech utterance?
+            var result_returned = false;
+            var message = document.querySelector('#message');  // show the result sting directly in the HTML (for developing purposes)
+            
+            // import grammer 
+            var SpeechRecognition = SpeechRecognition || webkitSpeechRecognition;
+            var SpeechGrammarList = SpeechGrammarList || webkitSpeechGrammarList;
+            var grammar = '#JSGF V1.0;'
+    
+            // set recogntition parameters 
+            var recognition = new SpeechRecognition();
+            var speechRecognitionList = new SpeechGrammarList();
+            speechRecognitionList.addFromString(grammar, 1);
+            recognition.grammars = speechRecognitionList;
+            recognition.lang = 'en-US';
+            recognition.interimResults = false;
+    
+            // function that will be called whenever a speech start signal is detected. 
+            recognition.onspeechstart = function(info) {
+                speech_has_started = true;
+                voice_key_triggered = true;       
+                start_speak_time = Date.now()        
+                picture = "url('./res/detected.png')"   
+                display_element.querySelector("#jspsych-html-voicekey-response-answerInput").style.backgroundImage = picture; 
+                rt = get_reaction_time(start_speak_time - presentation_start_time)
+                console.log('Participant started speaking; (RT = ' + rt + ')')  
+            }
+    
+            // function that will be called automatically when speech has stopped 
+            recognition.onspeechend = function() {
+                console.log('Participant has stopped speaking, sending audio to API...');
+                speech_has_ended = true;  
+                API_sent_time = Date.now(); // register the timepoint at which the audio was sent to the API
+                start_check_API(); // start to check if a valid result was returned. If not, restart recognition procedure
+    
+            }
+    
+            // function that will be called whenever a result is received from the speech API
+            recognition.onresult = function(event) {
+                var last = event.results.length - 1;
+                command = event.results[last][0].transcript;
+                message.textContent =  command ;
+                console.log('Result succesfully received! Participant spoke: ' + command + '; conf = ' + event.results[0][0].confidence);
+                full_results = event.results
+                result_returned = true;
+                clearInterval(check_interval)   // stop the check procedure
+                show_feedback();                // show feedback
+            };  
+
+            recognition.start();
+        
+        }
+
+
         // function to check if a valid result was returned after the participant stopped speaking 
         var check_API_timeout = function () {
-            if ((typeof command !== 'undefined') & voice_key_triggered) {
+            if ((!result_returned) && (voice_key_triggered)) {
+            //console.log(command)
             console.log('no response found')
             txt = 'I did not understand. Say again?'
             display_element.querySelector("#jspsych-html-voicekey-response-feedback").innerHTML = txt
@@ -232,15 +305,14 @@ jsPsych.plugins["html-speech-API-response"] = (function () {
         }
         
         // after speech has stopped, check for a result every 4 seconds:
-        var start_check_API = function () {
-            check_interval = window.setInterval(function(){
-            check_API_timeout();
-            }, 4000);
+       var start_check_API = function () {
+           //console.log(result_returned)
+           check_interval = window.setInterval(function(){
+           check_API_timeout();
+           }, 4000);
         }
 
-        // start recognition process!
-        recognition.start();
-            
+        
         // show feedback about the final response to the participant
         var show_feedback = function () {
 
@@ -343,18 +415,18 @@ jsPsych.plugins["html-speech-API-response"] = (function () {
         // function to check if a response is correct
         var compute_correctness = function () {
 
-            if (is_response_correct(document.querySelector('#message').innerHTML) === trial.question.answer) {
+            if (document.querySelector('#message').innerHTML === trial.question.answer) {
                 correct = true;
                 console.log('Answer is correct')
                 end_speak_time = Date.now();
-                final_response = is_response_correct(document.querySelector('#message').innerHTML)
+                //final_response = is_response_correct(document.querySelector('#message').innerHTML)
 
             } else {
                 correct = false;
                 attempt =  false;
                 console.log('Answer is incorrect')
                 end_speak_time = Date.now();
-                final_response = is_response_correct(document.querySelector('#message').innerHTML)
+               // final_response = is_response_correct(document.querySelector('#message').innerHTML)
             }
 
         } 
