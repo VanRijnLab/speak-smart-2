@@ -1,7 +1,7 @@
-# jsrl - German Cities
+# jsrl - SPEECH API and automatic voice key trigger 
 
-Javascript implementation of RUGged Learning for studying the locations of famous German landmarks using a voice key.
-Requires a voice key trigger box and a gamepad device used by the experimenter to classify responses.
+Javascript implementation of RUGged Learning for studying swahili vocabulary, using automaic speech assessment and voice key.
+Works best in Chrome. Requires a microphone and headphones. 
 
 
 ## Usage
@@ -26,11 +26,10 @@ Launch the server:
 
 ### Run the experiment
 
-[localhost:8080/index.html](localhost:8080/index_B&C.html)
-[localhost:8080/index.html](localhost:8080/index_A.html)
+[localhost:8080/index.html](localhost:8080/index.html)
+
 
 ### Troubleshooting
 
 Setup options can be changed at the top of the `index.html` file.
 
-To check which gamepad devices are connected, go to [localhost:8080/voicekey-test.html](localhost:8080/voicekey-test.html).
