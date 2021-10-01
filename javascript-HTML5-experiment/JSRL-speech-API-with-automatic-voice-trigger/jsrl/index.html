@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Experiment</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="lib/jquery-3.3.1.min.js"></script>
+    <script src="js/jsPsych/jspsych.js"></script>
+    <script src="js/jsPsych/plugins/custom/jspsych-html-keyboard-word-response.js"></script>            
+    <script src="js/jsPsych/plugins/custom/jspsych-html-keyboard-flashcard-response.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-external-html.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-survey-text.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-instructions.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-call-function.js"></script>
+    <script src="js/jsPsych/plugins/custom/jspsych-html-speech-API-response.js"></script>
+    <script src="js/jsPsych/plugins/custom/jspsych-html-speech-API-flashcard-response.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-audio-button-response.js" ></script>
+    <script src="lib/blockrain.jquery.min.js"></script>
+    <script src="js/rl-model.js"></script>
+    <script src="js/ouicards.js"></script>
+    <script src="js/gamepad-listener.js"></script>
+    <script src="lib/papaparse.min.js"></script>
+    <script src="lib/opencpu-0.5.js"></script>
+    <link rel="stylesheet" type="text/css" media="screen" href="js/jsPsych/css/jspsych.css" />
+    <link rel="stylesheet" type="text/css" media="screen" href="css/custom.css" />
+    
+
+</head>
+
+<body>
+    <span id='message'></span>
+    <div id="jspsych-target"></div>
+</body>
+
+<script>
+
+
+    //---------------------//
+    //    Configuration    //
+    //---------------------//
+
+    var cond = 'speaking'  // or set to 'speaking' to test the speech-based block
+
+    jsPsych.data.addProperties({
+        condition: cond
+    });
+
+    //select appropriate materials
+
+    var materials =  "./res/materials.csv"
+    var filler_materials = "./res/filler.csv"
+ 
+    // Durations
+    const learning_duration = 2 * 60000; // 12 minutes
+    const filler_duration = 0.1 * 60000; // 3 minutes
+    const correct_feedback_duration = 1500; // 0.6 seconds
+    const almost_correct_feedback_duration = 1500; // 1.2 seconds
+    const incorrect_feedback_duration = 4000; // 4 seconds
+    const incorrect_feedback_duration_filler = 7000; // 7 seconds
+    const trial_duration = 15000; // automatically advance after 15 seconds
+    const trial_duration_filler = 45000; // and take 45 secs for the filler
+    const max_trial_duration = 15000; // move on to next trial after 15 seconds
+
+    // Materials
+    
+    const shuffle_items = true; // new items are picked randomly
+    const shuffle_items_calc = false; //do not shuffle the arithmetic facts as they are presented with increasing difficulty
+    const preload_audio = true; // preloading prevents delays
+    
+    const permissible_edit_distance = 4
+    const default_correct = Boolean(false)
+    const default_repeat = Number(0)
+
+    // Spacing model
+    const lookahead_time = 15000;
+    const forget_threshold = -0.8;
+    const default_alpha = 0.35;
+
+    // Bayesian model
+    // Hyperparameters of the Normal-Gamma prior
+    const mu_0 = 0.3;
+    const kappa_0 = 1;
+    const a_0 = 3;
+    const b_0 = 0.2;
+
+    const default_studied = false
+
+    // Experiment setup
+ 
+    const enable_focus_check = false;
+    const max_focus_loss_interval = 5000;
+
+    //---------------------//
+    //        Setup        //
+    //---------------------//
+
+ 
+    // Write experiment data to server
+    function save_data(name, data, callback) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', 'write-data.php');
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.send(JSON.stringify({ filename: name, filedata: data }));
+        setTimeout(callback, 1000);
+    }
+
+    // Generate a random subject ID with 15 characters
+    var subject_id = jsPsych.randomization.randomID(15);
+
+    // Get browser information
+    var browser_info = {
+        user_agent: navigator.userAgent,
+        on_chrome: navigator.userAgent.match(/chrome/gi) != null,
+        on_mobile: navigator.userAgent.match(/mobi/gi) != null,
+        language: navigator.language || navigator.userLanguage || navigator.browserLanguage || navigator.systemLanguage,
+        screen_resolution: [window.screen.width, window.screen.height],
+        platform: navigator.platform,
+        timezone: window.Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+
+    jsPsych.data.addProperties({
+        subject: subject_id,
+        browser_info: JSON.stringify(browser_info),
+    });
+
+    // Detect loss of focus on experiment tab/window
+    var focus_lost = null;
+    check_focus_loss = function (data) {
+        if (enable_focus_check) {
+            if (data.event == "blur") {
+                // Experiment has lost focus
+                focus_lost = Date.now();
+            }
+            if (data.event == "focus" & focus_lost != null) {
+                time_away = Date.now() - focus_lost;
+                focus_lost = null;
+                // Stop the experiment if user was away for more than 5 seconds
+                if (time_away > max_focus_loss_interval) {
+                    jsPsych.endExperiment("The experiment has been terminated because you clicked away.")
+                }
+            }
+        }
+    }
+
+    var count_studied_1 = 0;   // first block of each session (RT-adaptive)
+    
+    var test_score = 0;
+    var test_items = 0;
+
+
+    //---------------------//
+    // Timeline components //
+    //---------------------//
+
+    //-------------//
+    //  PREAMBLE   //
+    //-------------//
+
+    // Participant number for data registration
+  
+    var enter_participant_number = {
+        type: 'survey-text',
+        questions: [
+            {
+                prompt:  '<h1> Speak Smart! Automatic Voice Processing </h1>  <br> <br> \ Welcome! Please enter your participant identifier below:'
+            }
+        ],
+        on_finish: function (data) {
+            participant_number = JSON.parse(data.responses).Q0;
+            jsPsych.data.addProperties({
+                participant_number: participant_number
+            })
+        }
+    };
+
+
+    //-----------//
+    //  FILLER   //
+    //-----------//
+
+    // Setup
+    var setup_filler = {
+        type: 'call-function',
+        func: function () {
+            load_facts(filler_materials, shuffle_items_calc); // calls the function in rl-model.js
+        }
+    };
+
+    var calit = 0;
+
+    // Instructions 
+    var filler_instructions = {
+        type: 'instructions',
+        pages: ['<h1> Done with the learning session! </h1> <br>  \
+        <p> Next, a short number-task will follow. Complete the number sequece by giving the right number at the place of the questionmark.\
+        <p> Press the <kbd>spacebar </kbd> to start.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    // Initialise and start the timer for the filler
+    var start_time_filler;
+
+    var rl_timer_filler = {
+    type: 'call-function',
+    func: function () {
+        start_time_filler = Date.now();
+        rl_timer_ticks = setInterval(function () {
+            var proportion_time_elapsed = (Date.now() - start_time_filler) /filler_duration;
+        }, 100);
+    }
+    };
+
+    // Filler trials
+    var filler_trial = {
+    type: "html-keyboard-word-response",
+    correct_feedback_duration: correct_feedback_duration,
+    almost_correct_feedback_duration: almost_correct_feedback_duration,
+    incorrect_feedback_duration: incorrect_feedback_duration_filler,
+    trial_duration: trial_duration_filler,
+    permissible_edit_distance: permissible_edit_distance,
+    question: function () {
+        return get_new_cal(calit); // calls the function in rl-model.js
+    },
+    on_finish: function (data) {
+        record_response(data);
+        calit++
+    }
+    };
+
+    // Present new trials until time is up 
+    var loop_filler = {
+    timeline: [filler_trial],
+        loop_function: function () {
+            if (Date.now() - start_time_filler < filler_duration) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+
+    //-----------------------------------//
+    //  RT ADAPTIVE TYPING (SST)         //
+    //-----------------------------------//
+
+    // Setup
+    var rl_setup_SST = {
+        type: 'call-function',
+        func: function () {
+            count_studied_1 = 0;
+            load_facts(materials, shuffle_items); // calls the function in rl-model.js
+        }
+    };
+
+    // Instructions 
+    var instructions_SST = {
+        type: 'instructions',
+        pages: ['<h1>Instructions </h1> <br>  \
+        <p> Welcome! In this experiment, you will learn Swahili vocabulary.\
+        This experiment consists of four parts. Today, you will complete two parts. </br>\
+        Both parts will take 15-20 minutes. Please <b> type the correct translation of the Swahili word in the text box. </b> \
+        <p> Press the  <kbd>spacebar </kbd> to start.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    var rl_start_time_SST;
+
+    // Initialise timer 
+    var rl_timer_SST = {
+        type: 'call-function',
+        func: function () {
+            rl_start_time_SST = Date.now();
+            rl_timer_ticks = setInterval(function () {
+                var proportion_time_elapsed = (Date.now() - rl_start_time_SST) / learning_duration;
+            }, 100);
+        }
+    };
+    
+    // RL trial 
+    var rl_trial_SST = {
+        type: "html-keyboard-word-response",
+        correct_feedback_duration: correct_feedback_duration,
+        almost_correct_feedback_duration: almost_correct_feedback_duration,
+        incorrect_feedback_duration: incorrect_feedback_duration,
+        trial_duration: trial_duration,
+        permissible_edit_distance: permissible_edit_distance,
+        question: function () {
+            return get_next_fact(Date.now()); // calls the function in rl-model.js
+        },
+        on_finish: function (data) {
+            record_response(data);
+            if (data.study) {
+                count_studied_1++;
+            }
+        }
+    };
+
+    // Present new trials until time is up 
+    var loop_rl_trial_SST = {
+        timeline: [rl_trial_SST],
+        loop_function: function () {
+            if (Date.now() - rl_start_time_SST < learning_duration) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+    // Test instructions 
+    var instructions_test_SST = {
+        type: 'instructions',
+        pages: ['<h1> Test </h1> <br>  \
+        <p> Good job. Now, a test about the learned items will follow.\
+        <p> Press the <kbd>spacebar </kbd> to continue.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    // Test trials 
+    var rl_test_SST = {
+        type: "html-keyboard-word-response",
+        correct_feedback_duration: correct_feedback_duration,
+        almost_correct_feedback_duration: almost_correct_feedback_duration,
+        incorrect_feedback_duration: incorrect_feedback_duration,
+        trial_duration: trial_duration,
+        permissible_edit_distance: permissible_edit_distance,
+        question: function () {
+            return get_next_practised_fact(Date.now()); // calls the function in rl-model.js
+        },
+        on_finish: function (data) {
+            record_response(data);
+        }
+    };
+
+    // Present a new test trial for every fact that was studied 
+    var loop_test_SST = {
+       timeline: [rl_test_SST],
+       loop_function: function () {
+           return is_next_practised_fact();
+       }
+    };
+
+    //-----------------------------------//
+    //  LEITNER ADAPTIVE TYPING (LT)     //
+    //-----------------------------------//
+
+
+    // Setup
+    var flashcards = load_facts_flash(materials,shuffle_items);
+    var flash_setup_LT = {
+        type: 'call-function',
+        func: function () {
+            flashcards =  flashcards.slice(0,count_studied_1)
+            ouicards.loadFromArray(flashcards)
+            console.log(flashcards)
+        }
+    };
+
+    // Instructions 
+    var instructions_LT = {
+        type: 'instructions',
+        pages: ['<h1>Instructions </h1> <br>  \
+        <p> Done with todays first part!\
+        The second part will be similar to the first part. Take a break if you like. </b>\
+        <p> Press the  <kbd>spacebar </kbd> to start.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    var flash_start_time_LT;
+
+    // Initialise timer 
+    var flash_timer_LT = {
+        type: 'call-function',
+        func: function () {
+            flash_start_time_LT = Date.now();
+            flash_timer_ticks = setInterval(function () {
+                var proportion_time_elapsed = (Date.now() - flash_start_time_LT) / learning_duration;
+            }, 100);
+        }
+    };
+    
+    // Flashcard trial 
+    var flash_trial_LT = {
+        type: "html-keyboard-flashcard-response",
+        correct_feedback_duration: correct_feedback_duration,
+        almost_correct_feedback_duration: almost_correct_feedback_duration,
+        incorrect_feedback_duration: incorrect_feedback_duration,
+        trial_duration: trial_duration,
+        permissible_edit_distance: permissible_edit_distance,
+        newQuestion: function () {
+            return ouicards.next(); // calls the function in ouicards.js
+        },
+        on_finish: function (data) {
+            record_response(data);
+        }
+    };
+
+    // Present new trials until time is up 
+    var loop_flash_trial_LT = {
+        timeline: [flash_trial_LT],
+        loop_function: function () {
+            if (Date.now() - flash_start_time_LT < learning_duration) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+    // Test instructions 
+    var instructions_test_LT = {
+        type: 'instructions',
+        pages: ['<h1> Test </h1> <br>  \
+        <p> Good job. Now, a test about the learned items will follow.\
+        <p> Press the <kbd>spacebar </kbd> to continue.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    var count_tested_flash = 0;
+
+    // Test trials 
+    var flash_test_LT = {
+        type: "html-keyboard-flashcard-response",
+        correct_feedback_duration: correct_feedback_duration,
+        almost_correct_feedback_duration: almost_correct_feedback_duration,
+        incorrect_feedback_duration: incorrect_feedback_duration,
+        trial_duration: trial_duration,
+        permissible_edit_distance: permissible_edit_distance,
+        newQuestion: function () {
+            return ouicards.next_test(count_tested_flash); // calls the function in ouicards.js and iterates over all tested facts
+        },
+        on_finish: function (data) {
+            record_response(data);
+            count_tested_flash++;
+        }
+    };
+
+    // Present a new test trial for every fact that was studied 
+    var loop_test_LT = {
+        timeline: [flash_test_LT],
+        loop_function: function () {
+            if (count_studied_1 > count_tested_flash) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+    //-----------------------------------//
+    //  RT ADAPTIVE SPEAKING (SSS)       //
+    //-----------------------------------//
+
+     // Setup
+     var rl_setup_SSS = {
+        type: 'call-function',
+        func: function () {
+            calit = 0;
+            load_facts(materials, shuffle_items); // calls the function in rl-model.js
+        }
+    };
+
+    // Instructions 
+
+    var instructions_SSS = {
+        type: 'instructions',
+        pages: ['<h1>Instructions </h1> <br>  \
+        <p> Welcome! In this experiment, you will learn Swahili vocabulary.\
+        This experiment consists of four parts. Today, you will complete two parts. </br>\
+        Both parts will take 15-20 minutes. Please <b> speak the correct translation of the Swahili word when you see the question mark. </b>. \
+        <p> Press the  <kbd>spacebar </kbd> to start.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    // RL trial sequence 
+    var rl_start_time_SSS;
+
+    // Initialise timer
+    var rl_timer_SSS = {
+        type: 'call-function',
+        func: function () {
+            rl_start_time_SSS = Date.now();
+            rl_timer_ticks_SSS = setInterval(function () {
+                var proportion_time_elapsed = (Date.now() - rl_start_time_SSS) / learning_duration;
+            }, 100);
+        }
+    };
+
+    // RL trial
+    var rl_trial_SSS = {
+        type: "html-speech-API-response",
+        correct_feedback_duration: correct_feedback_duration,
+        almost_correct_feedback_duration: almost_correct_feedback_duration,
+        incorrect_feedback_duration: incorrect_feedback_duration,
+        trial_duration: trial_duration,
+        permissible_edit_distance: permissible_edit_distance,
+        question: function () {
+            return get_next_fact(Date.now()); // calls the function in rl-model.js
+        },
+        on_finish: function (data) {
+            record_response(data);
+            if (data.study) {
+                count_studied_1++;
+            }
+        }
+    };
+
+    // Present new trials until time is up 
+    var loop_rl_trial_SSS = {
+        timeline: [rl_trial_SSS],
+        loop_function: function () {
+            if (Date.now() - rl_start_time_SSS < learning_duration) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+    // Test instructions 
+    var instructions_test_SSS = {
+        type: 'instructions',
+        pages: ['<h1> Test </h1> <br>  \
+        <p> Good job. Now, a test about the learned items will follow.\
+        <p> Press the <kbd>spacebar </kbd> to continue.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    // Test trials
+    var rl_test_SSS = {
+        type: "html-speech-API-response",
+        correct_feedback_duration: correct_feedback_duration,
+        almost_correct_feedback_duration: almost_correct_feedback_duration,
+        incorrect_feedback_duration: incorrect_feedback_duration,
+        trial_duration: trial_duration,
+        permissible_edit_distance: permissible_edit_distance,
+        question: function () {
+            return get_next_practised_fact(Date.now()); // calls the function in rl-model.js
+        },
+        on_finish: function (data) {
+            record_response(data);
+        }
+    };
+
+    // Present a new test trial for every fact that was studied 
+    var loop_test_SSS = {
+       timeline: [rl_test_SSS],
+       loop_function: function () {
+           return is_next_practised_fact();
+       }
+    };
+
+
+    //-----------------------------------//
+    //  LEITNER ADAPTIVE SPEAKING (LS)  //
+    //-----------------------------------//
+    var count_studied_1 = 4;
+    // Setup
+    var flash_setup_LS = {
+        type: 'call-function',
+        func: function () {
+            flashcards =  flashcards.slice(0,count_studied_1)
+            ouicards.loadFromArray(flashcards)
+            console.log(flashcards)
+        }
+    };
+
+    // Instructions 
+
+    var instructions_LS = {
+        type: 'instructions',
+        pages: ['<h1>Instructions </h1> <br>  \
+        <p> Done with todays first part!\
+        The second part will be similar to the first part. Take a break if you like. </b>\
+        <p> Press the  <kbd>spacebar </kbd> to start.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    // Flashcard trial sequence 
+    var flash_start_time_LS;
+
+    // Initialise timer
+    var flash_timer_LS = {
+        type: 'call-function',
+        func: function () {
+            flash_start_time_LS = Date.now();
+            flash_timer_ticks_LS = setInterval(function () {
+                var proportion_time_elapsed = (Date.now() - flash_start_time_LS) / learning_duration;
+            }, 100);
+        }
+    };
+
+    // Flashcard trial
+    var flash_trial_LS = {
+        type: "html-speech-API-flashcard-response",
+        correct_feedback_duration: correct_feedback_duration,
+        almost_correct_feedback_duration: almost_correct_feedback_duration,
+        incorrect_feedback_duration: incorrect_feedback_duration,
+        trial_duration: trial_duration,
+        permissible_edit_distance: permissible_edit_distance,
+        newQuestion: function () {
+            return ouicards.next(); // calls the function in ouicards.js
+        },
+        on_finish: function (data) {
+            record_response(data);
+        }
+    };
+
+    // Present new trials until time is up 
+    var loop_flash_trial_LS = {
+        timeline: [flash_trial_LS],
+        loop_function: function () {
+            if (Date.now() - flash_start_time_LS < learning_duration) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+    // Test instructions 
+    var instructions_test_LS = {
+        type: 'instructions',
+        pages: ['<h1> Test </h1> <br>  \
+        <p> Good job. Now, a test about the learned items will follow.\
+        <p> Press the <kbd>spacebar </kbd> to continue.</p>'],
+        key_forward: 'spacebar'
+    };
+    
+    var count_tested_flash = 0;
+
+    // Test trials 
+    var flash_test_LS = {
+        type: "html-speech-API-flashcard-response",
+        correct_feedback_duration: correct_feedback_duration,
+        almost_correct_feedback_duration: almost_correct_feedback_duration,
+        incorrect_feedback_duration: incorrect_feedback_duration,
+        trial_duration: trial_duration,
+        permissible_edit_distance: permissible_edit_distance,
+        newQuestion: function () {
+            return ouicards.next_test(count_tested_flash); // calls the function in ouicards.js and iterates over all tested facts
+        },
+        on_finish: function (data) {
+            record_response(data);
+            count_tested_flash++;
+        }
+    };
+
+    // Present a new test trial for every fact that was studied 
+    var loop_test_LS = {
+       timeline: [flash_test_LS],
+       loop_function: function () {
+            if (count_studied_1 > count_tested_flash) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+    //--------------------//
+    //  COMPLETE MESSAGE  //
+    //--------------------//
+
+    var instructions_done = {
+        type: 'instructions',
+        pages: ['<h1> Done! </h1> <br>  \
+        <p> Well done! You completed the experiment. Press the spacebar to store your data'],
+        key_forward: 'spacebar'
+    };
+
+
+    //---------------------//
+    // Experiment timeline //
+    //---------------------//
+
+    var timeline = [];
+
+        //  Preamble
+        timeline.push(enter_participant_number);        // Participant number
+        
+        if (cond == 'typing'){
+
+          // RT-adapitve learning session
+            timeline.push(rl_setup_SST)
+            timeline.push(instructions_SST)
+            timeline.push(rl_timer_SST)
+            timeline.push(loop_rl_trial_SST)
+            // Filler 
+            timeline.push(setup_filler)
+            timeline.push(filler_instructions)
+            timeline.push(rl_timer_filler)
+            timeline.push(loop_filler)
+            // Test
+            timeline.push(instructions_test_SST)
+            timeline.push(loop_test_SST)        
+                
+            // Leitner-adaptive learning session
+            timeline.push(flash_setup_LT)
+            timeline.push(instructions_LT)
+            timeline.push(flash_timer_LT)
+            timeline.push(loop_flash_trial_LT)
+            // Filler 
+            timeline.push(setup_filler)
+            timeline.push(filler_instructions)
+            timeline.push(rl_timer_filler)
+            timeline.push(loop_filler)
+            // Test 
+            timeline.push(instructions_test_LT)
+            timeline.push(loop_test_LT)
+
+        } else {  // condition = 'speaking'
+
+            /*// RT-adapitve learning session
+            timeline.push(rl_setup_SSS)
+            timeline.push(instructions_SSS)
+            timeline.push(rl_timer_SSS)
+            timeline.push(loop_rl_trial_SSS)
+            // Filler 
+            timeline.push(setup_filler)
+            timeline.push(filler_instructions)
+            timeline.push(rl_timer_filler)
+            timeline.push(loop_filler)
+            // Test
+            timeline.push(instructions_test_SSS)
+            timeline.push(loop_test_SSS)  */
+
+            // Leitner-adaptive learning session
+            timeline.push(flash_setup_LS)
+            timeline.push(instructions_LS)
+            timeline.push(flash_timer_LS)
+            timeline.push(loop_flash_trial_LS)
+            // Filler 
+            timeline.push(setup_filler)
+            timeline.push(filler_instructions)
+            timeline.push(rl_timer_filler)
+            timeline.push(loop_filler)
+            // Test 
+            timeline.push(instructions_test_LS)
+            timeline.push(loop_test_LS)
+            
+        }
+
+        // complete message:
+        
+        timeline.push(instructions_done);         
+
+
+    //---------------------//
+    //    Run experiment   //
+    //---------------------//
+
+    jsPsych.init({
+        display_element: 'jspsych-target',
+        timeline: timeline,
+        on_interaction_data_update: check_focus_loss,
+        on_finish: function () {
+            save_data("speak_smart_" + participant_number, jsPsych.data.get().csv(), function () {
+                document.write('<div class="endscreen" style="text-align:center; border:0px solid; padding:10px; font-size:120%; float:center"><br><p>Done!</p><br><br><p>Thank you very much for your participation. You can close the window.</p></div>')
+                document.close();
+            });
+        }
+    });
+
+</script>   
+
+</html>
