@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Experiment</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="lib/jquery-3.3.1.min.js"></script>
+    <script src="js/jsPsych/jspsych.js"></script>
+    <script src="js/jsPsych/plugins/custom/jspsych-html-keyboard-word-response.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-external-html.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-survey-text.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-instructions.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-call-function.js"></script>
+    <script src="js/jsPsych/plugins/custom/jspsych-html-speech-API-response.js"></script>
+    <script src="js/jsPsych/plugins/jspsych-audio-button-response.js" ></script>
+    <script src="lib/blockrain.jquery.min.js"></script>
+    <script src="js/rl-model.js"></script>
+    <script src="js/ouicards.js"></script>
+    <script src="js/gamepad-listener.js"></script>
+    <script src="lib/papaparse.min.js"></script>
+    <script src="lib/opencpu-0.5.js"></script>
+    <link rel="stylesheet" type="text/css" media="screen" href="js/jsPsych/css/jspsych.css" />
+    <link rel="stylesheet" type="text/css" media="screen" href="css/custom.css" />
+    
+
+</head>
+
+<body>
+    <span id='message'></span>
+    <div id="jspsych-target"></div>
+</body>
+
+<script>
+
+
+    //---------------------//
+    //    Configuration    //
+    //---------------------//
+
+    // Get condition from the query string in the URL
+    var urlParams = new URLSearchParams(window.location.search);
+    var cond = urlParams.get("cond");
+    var lang = urlParams.get("lang");
+
+    // If no condition was specified, generate one at random
+    if (cond == null) {
+        var conditions = [1,2,3,4,5,6];
+        var cond = jsPsych.randomization.sampleWithoutReplacement(conditions, 1)
+    }
+
+    // If no language was specified, set language to Dutch
+    if (lang == null) {
+        var lang = 'dutch'
+    }
+    
+    jsPsych.data.addProperties({
+        condition: cond,
+        language: lang,
+    });
+
+    //select appropriate materials
+
+    var materials =  "./res/materials.csv"
+ 
+    // Durations
+    const rl_duration = 4 * 60000; // 12 minutes
+
+  
+    const correct_feedback_duration = 0; // 0.6 seconds
+    const almost_correct_feedback_duration = 0; // 1.2 seconds
+    const incorrect_feedback_duration = 0; // 4 seconds
+    const incorrect_feedback_duration_filler = 7000; // 7 seconds
+    const trial_duration = 15000; // automatically advance after 15 seconds
+    const max_trial_duration = 30000 // move on to next trial after 30 seconds
+
+    // Materials
+    const n_items = 100; // number of items to include 
+   
+    const shuffle_items = false // new items are picked randomly
+    const shuffle_items_calc = false; //do not shuffle the arithmetic facts as they are presented with increasing difficulty
+    const preload_audio = true; // preloading prevents delays
+    
+    const permissible_edit_distance = 4
+    const default_correct = Boolean(false)
+    const default_repeat = Number(0)
+
+    // Spacing model
+    const lookahead_time = 15000;
+    const forget_threshold = -0.8;
+    const default_alpha = 0.35;
+
+    // Bayesian model
+    // Hyperparameters of the Normal-Gamma prior
+    const mu_0 = 0.3;
+    const kappa_0 = 1;
+    const a_0 = 3;
+    const b_0 = 0.2;
+
+    const default_studied = false
+
+    // Experiment setup
+ 
+    const enable_focus_check = false;
+    const max_focus_loss_interval = 5000;
+
+    //---------------------//
+    //        Setup        //
+    //---------------------//
+
+ 
+    // Write experiment data to server
+    function save_data(name, data, callback) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', 'write-data.php');
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.send(JSON.stringify({ filename: name, filedata: data }));
+        setTimeout(callback, 1000);
+    }
+
+    // Generate a random subject ID with 15 characters
+    var subject_id = jsPsych.randomization.randomID(15);
+
+    // Get browser information
+    var browser_info = {
+        user_agent: navigator.userAgent,
+        on_chrome: navigator.userAgent.match(/chrome/gi) != null,
+        on_mobile: navigator.userAgent.match(/mobi/gi) != null,
+        language: navigator.language || navigator.userLanguage || navigator.browserLanguage || navigator.systemLanguage,
+        screen_resolution: [window.screen.width, window.screen.height],
+        platform: navigator.platform,
+        timezone: window.Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+
+    jsPsych.data.addProperties({
+        subject: subject_id,
+        browser_info: JSON.stringify(browser_info),
+    });
+
+    // Detect loss of focus on experiment tab/window
+    var focus_lost = null;
+    check_focus_loss = function (data) {
+        if (enable_focus_check) {
+            if (data.event == "blur") {
+                // Experiment has lost focus
+                focus_lost = Date.now();
+            }
+            if (data.event == "focus" & focus_lost != null) {
+                time_away = Date.now() - focus_lost;
+                focus_lost = null;
+                // Stop the experiment if user was away for more than 5 seconds
+                if (time_away > max_focus_loss_interval) {
+                    jsPsych.endExperiment("The experiment has been terminated because you clicked away.")
+                }
+            }
+        }
+    }
+
+    var count_studied = 0;
+    var test_score = 0;
+    var test_items = 0;
+
+
+    //---------------------//
+    // Timeline components //
+    //---------------------//
+
+
+    // Participant number for data registration
+  
+    var enter_participant_number = {
+        type: 'survey-text',
+        questions: [
+            {
+                prompt:  '<h1> Speak Smart! Automatic Voice Processing </h1>  <br> <br> \ Welcome! Please enter your participant identifier below:'
+            }
+        ],
+        on_finish: function (data) {
+            participant_number = JSON.parse(data.responses).Q0;
+            jsPsych.data.addProperties({
+                participant_number: participant_number
+            })
+        }
+    };
+
+
+    // Setup
+     var rl_setup = {
+        type: 'call-function',
+        func: function () {
+            load_facts(materials, shuffle_items); // calls the function in rl-model.js
+        }
+    };
+
+    // Instructions 
+
+    var instructions = {
+        type: 'instructions',
+        pages: ['<h1>Instructions </h1> <br>  \
+        <p> Welcome. In this experiment, you will be asked to pronunce English words. </br>\
+        You will be asked to pronunce each word three times. When you see the microhpne with the question mark, pleas speak the word. Good luck!\
+        <p> Press the <kbd>spacebar </kbd> to continue.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    var instructions_b2 = {
+        type: 'instructions',
+        pages: ['<h1>Well done! </h1> <br>  \
+        <p> You completed the first part. </br>\
+        Take a break if you like. When you are ready, you can conitnue with the second part.\
+        <p> Press the <kbd>spacebar </kbd> to continue.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    var instructions_b3 = {
+        type: 'instructions',
+        pages: ['<h1>Well done! </h1> <br>  \
+        <p> You completed the second part. </br>\
+        Take a break if you like. When you are ready, you can conitnue with the third part.\
+        <p> Press the <kbd>spacebar </kbd> to continue.</p>'],
+        key_forward: 'spacebar'
+    };
+
+    var instructions_b4 = {
+        type: 'instructions',
+        pages: ['<h1>Well done! </h1> <br>  \
+        <p> You completed the third part. </br>\
+        Take a break if you like. When you are ready, you can conitnue with the fourth and final part.\
+        <p> Press the <kbd>spacebar </kbd> to continue.</p>'],
+        key_forward: 'spacebar'
+    };
+
+
+
+    // RL trial
+    var rl_trial = {
+        type: "html-speech-API-response",
+        correct_feedback_duration: correct_feedback_duration,
+        almost_correct_feedback_duration: almost_correct_feedback_duration,
+        incorrect_feedback_duration: incorrect_feedback_duration,
+        trial_duration: trial_duration,
+        permissible_edit_distance: permissible_edit_distance,
+        question: function () {
+            console.log('item: ' + it)
+            console.log('repetition: ' + rep)
+            return get_next_fact(rep, Date.now()); // calls the function in rl-model.js
+        },
+        on_finish: function (data) {
+            record_response(data);
+            rep ++;
+
+            if (rep == 3){
+                rep = 0;
+                it ++;
+            }
+            
+        }
+    };
+
+
+    // PART 1
+
+    var it = 0;
+    var rep = 0;
+    var n_items_1 = 25;
+
+    // Present new trials until all items have been learned
+    var loop_rl_trial_1 = {
+        timeline: [rl_trial],
+        loop_function: function () {
+            if (it < n_items_1) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+    // PART 2
+
+    var n_items_2 = 50;
+
+    // Present new trials until all items have been learned
+    var loop_rl_trial_2 = {
+        timeline: [rl_trial],
+        loop_function: function () {
+            if (it < n_items_2) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+     // PART 3
+
+    var n_items_3 = 75;
+
+    // Present new trials until all items have been learned
+    var loop_rl_trial_3 = {
+        timeline: [rl_trial],
+        loop_function: function () {
+            if (it < n_items_3) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+    var n_items_4 = 100;
+
+    // Present new trials until all items have been learned
+    var loop_rl_trial_4 = {
+        timeline: [rl_trial],
+        loop_function: function () {
+            if (it < n_items_4) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    };
+
+    // Complete message
+
+    var instructions_post = {
+        type: 'instructions',
+        pages: ['<h1> Done! </h1> <br>  \
+        <p> Well done! You completed the experiment. Press the spacebar to store your data'],
+        key_forward: 'spacebar'
+    };
+
+
+    //---------------------//
+    // Experiment timeline //
+    //---------------------//
+
+    var timeline = [];
+        
+
+        
+        //  Preamble
+        timeline.push(enter_participant_number);        // Participant number
+
+
+        // Learnin session
+        timeline.push(rl_setup);                   // Set up RL model
+        timeline.push(instructions);               // Experiment instructions block A
+        timeline.push(loop_rl_trial_1);            // Present new trials until trials are up
+        timeline.push(instructions_b2);            // Break instructions
+        timeline.push(loop_rl_trial_2);            // Present new trials until trials are up
+        timeline.push(instructions_b3);            // Break instructions
+        timeline.push(loop_rl_trial_3);            // Present new trials until trials are up
+        timeline.push(instructions_b3);            // Break instructions 
+        timeline.push(loop_rl_trial_4);            // Present new trials until trials are up
+        timeline.push(instructions_post);          // Instructions done 
+
+
+    //---------------------//
+    //    Run experiment   //
+    //---------------------//
+
+    jsPsych.init({
+        display_element: 'jspsych-target',
+        timeline: timeline,
+        on_interaction_data_update: check_focus_loss,
+        on_finish: function () {
+            save_data("speak_smart_pilot" + participant_number, jsPsych.data.get().csv(), function () {
+                document.write('<div class="endscreen" style="text-align:center; border:0px solid; padding:10px; font-size:120%; float:center"><br><p>Done!</p><br><br><p>Thank you very much for your participation. You can close the window.</p></div>')
+                document.close();
+            });
+        }
+    });
+
+</script>   
+
+</html>
