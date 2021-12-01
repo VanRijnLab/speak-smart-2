@@ -1,0 +1,495 @@
+---
+title: "Analyses speak smart 2.0"
+author: "Thomas Wilschut"
+date: "12/1/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+## Analyses
+
+The main goal of the speak smart study is to see if benefits of adaptive word learning, 
+are consistently found in typing-based learning, generalize to speech-based learning.
+To examine the possibility for speech-based, the speak smart experiment contains 4 learning sessions:
+The first session uses the SlimStampen adaptive learning algorithm to determine the repetition schedule 
+of the items, and is typing-based (SST). The second session is also typing-based, but uses a less adaptive 
+Leitner flashcard system (LS). The third block is speech-based and uses the SlimStampen algorithm (SSS). The
+fourth and final block is also speech-based, and uses the Leitner repetition schedule (LS).
+
+# Import packages, load data, and define functions:
+```{r, show =FALSE, echo = FALSE}
+
+options(warn=-1)
+
+# packages:
+library('tidyverse') 
+library('ggplot2') 
+library('nlme')
+library('plyr') 
+library('dplyr') 
+library('reshape2')
+library('ggridges')
+library('BBmisc')
+library('quanteda')
+library('hrbrthemes')
+library('jsonlite')
+library('lme4')
+library('gridExtra')
+library('gghalves')
+library('lmerTest') 
+library('BayesFactor')
+library('ggsignif')
+
+# functions to summarize/show data:
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      se = sd(x[[col]]/ sqrt(length(x[[col]])), na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+GeomSplitViolin <- ggproto("GeomSplitViolin", GeomViolin, 
+                           draw_group = function(self, data, ..., draw_quantiles = NULL) {
+                             data <- transform(data, xminv = x - violinwidth * (x - xmin), xmaxv = x + violinwidth * (xmax - x))
+                             grp <- data[1, "group"]
+                             newdata <- plyr::arrange(transform(data, x = if (grp %% 2 == 1) xminv else xmaxv), if (grp %% 2 == 1) y else -y)
+                             newdata <- rbind(newdata[1, ], newdata, newdata[nrow(newdata), ], newdata[1, ])
+                             newdata[c(1, nrow(newdata) - 1, nrow(newdata)), "x"] <- round(newdata[1, "x"])
+                             
+                             if (length(draw_quantiles) > 0 & !scales::zero_range(range(data$y))) {
+                               stopifnot(all(draw_quantiles >= 0), all(draw_quantiles <=
+                                                                         1))
+                               quantiles <- ggplot2:::create_quantile_segment_frame(data, draw_quantiles)
+                               aesthetics <- data[rep(1, nrow(quantiles)), setdiff(names(data), c("x", "y")), drop = FALSE]
+                               aesthetics$alpha <- rep(1, nrow(quantiles))
+                               both <- cbind(quantiles, aesthetics)
+                               quantile_grob <- GeomPath$draw_panel(both, ...)
+                               ggplot2:::ggname("geom_split_violin", grid::grobTree(GeomPolygon$draw_panel(newdata, ...), quantile_grob))
+                             }
+                             else {
+                               ggplot2:::ggname("geom_split_violin", GeomPolygon$draw_panel(newdata, ...))
+                             }
+                           })
+
+geom_split_violin <- function(mapping = NULL, data = NULL, stat = "ydensity", position = "identity", ..., 
+                              draw_quantiles = NULL, trim = TRUE, scale = "area", na.rm = FALSE, 
+                              show.legend = NA, inherit.aes = TRUE) {
+  layer(data = data, mapping = mapping, stat = stat, geom = GeomSplitViolin, 
+        position = position, show.legend = show.legend, inherit.aes = inherit.aes, 
+        params = list(trim = trim, scale = scale, draw_quantiles = draw_quantiles, na.rm = na.rm, ...))
+}
+
+
+# import:
+dat <- readRDS("data.rds")        # full dataset containing data from all both sessions 
+long <- readRDS("data_long.rds")  # data on long-term retention (after 4-8 days)
+
+
+df = aggregate(correct ~ block + participant_number, data= dat %>% filter (types == 'Test'), sum, na.rm=TRUE)
+df2 = aggregate(correct ~ block + participant_number, data= dat %>% filter (types == 'Test'), length)
+df$number <- df2$correct
+df$prop <- df$correct/df$number
+df$method_adaptive <- df$block == 'SST' | df$block == 'SSS'
+df$condition <- df$block == 'SSS' | df$block == 'LS'
+df[(df$condition == FALSE),'condition'] <- 'Typing'
+df[(df$condition == TRUE),'condition'] <- 'Speaking'
+df2 <- df %>% filter(method_adaptive == FALSE)
+df3 <- df %>% filter(method_adaptive == TRUE)
+df2$cor_leitner <- df2$correct
+df2$cor_adaptive <- df3$correct
+
+immediate_test <- df2 %>% select(participant_number, cor_leitner, cor_adaptive, condition)
+immediate_test$al_benefit <- immediate_test$cor_adaptive - immediate_test$cor_leitner
+
+long_term_retention <- long %>% select(participant_number, cor_leitner, cor_adaptive, condition)
+long_term_retention$al_benefit <- long_term_retention$cor_adaptive - long_term_retention$cor_leitner
+
+immediate_test$prop_leitner <- immediate_test$cor_leitner/22
+immediate_test$prop_adaptive <- immediate_test$cor_adaptive/22
+immediate_test$prop_alb <- immediate_test$prop_adaptive - immediate_test$prop_leitner
+immediate_test$overall_prop <- (immediate_test$prop_adaptive + immediate_test$prop_leitner)/2
+immediate_test$abl_perc_dif <- -((immediate_test$prop_adaptive/immediate_test$prop_leitner)-1 )*100
+
+
+long_term_retention$prop_leitner <- long_term_retention$cor_leitner/22
+long_term_retention$prop_adaptive <- long_term_retention$cor_adaptive/22
+long_term_retention$prop_alb <- long_term_retention$prop_adaptive - long_term_retention$prop_leitner
+long_term_retention$overall_prop <- (long_term_retention$prop_adaptive + long_term_retention$prop_leitner)/2
+long_term_retention$abl_perc_dif <- as.numeric(((long_term_retention$prop_adaptive/long_term_retention$prop_leitner)-1 )*100)
+
+long_term_retention$abl_perc_dif [!is.finite(long_term_retention$abl_perc_dif )] <- NaN              # convert 'Inf' to NaN
+long_term_retention  <- long_term_retention[!is.na(long_term_retention$abl_perc_dif),]  
+
+
+# Means:
+typing_immediate <- immediate_test %>% filter(condition == "Typing")
+typing_immediate_sum <- typing_immediate %>% summarise_all(mean)
+typing_immediate_sum$cond <- 'Typing, immediate test'
+
+speaking_immediate <- immediate_test %>% filter(condition == "Speaking")
+speaking_immediate_sum <- speaking_immediate %>% summarise_all(mean)
+speaking_immediate_sum$cond <- 'Speaking, immediate test'
+
+typing_ltr <- long_term_retention %>% filter(condition == "Typing")
+typing_ltr_sum <- typing_ltr %>% summarise_all(mean)
+typing_ltr_sum$cond <- 'Typing, long term test'
+
+speaking_ltr <- long_term_retention %>% filter(condition == "Speaking")
+speaking_ltr_sum <- speaking_ltr %>% summarise_all(mean)
+speaking_ltr_sum$cond <- 'Speaking, long term test'
+
+means <- rbind (typing_immediate_sum, speaking_immediate_sum, typing_ltr_sum, speaking_ltr_sum)
+means <-  means %>% select (cond, cor_adaptive, cor_leitner, al_benefit, prop_leitner, prop_adaptive, overall_prop, prop_alb, abl_perc_dif)
+```
+
+
+
+# Plots 1: correctness
+```{r, echo=FALSE}
+options(warn=-1)
+
+## 1. Correctness during learning phase ##
+# prepare:
+df <- data_summary(dat %>% filter (types == 'Learning'), varname="correct", 
+                    groupnames=c("method_adaptive", "participant_number", "condition"))
+df2 <- df %>% filter(method_adaptive == FALSE)
+df3 <- df %>% filter(method_adaptive == TRUE)
+df2$cor_leitner <- df2$correct
+df2$cor_adaptive <- df3$correct
+
+mean_leitner <- mean(df2$cor_leitner)
+mean_adaptive <- mean(df2$cor_adaptive)
+
+# plot:
+ggplot(df2, aes(x = cor_leitner, y = cor_adaptive, color = condition)) + 
+  geom_point(size = 4, na.rm = FALSE, alpha =  0.7) + geom_abline(intercept = 0, slope = 1, colour = 'grey') +   geom_hline(yintercept = mean_adaptive, linetype = "dashed") +
+  geom_vline(xintercept = mean_leitner, linetype = "dashed") +
+  geom_point(x = mean_leitner, y = mean_adaptive, size = 3, color = "black") +
+  coord_fixed() + ylim(0.5,1) + xlim(0.5,1) +
+  theme_classic() + scale_color_manual(values=c('#228b22','#006994')) +      
+  labs(title="Proportion of correct responses during learning", 
+       x="Using the Leitner algortihm", 
+       y = "Using the SlimStampen algortihm",
+       color = "Learning modality") +
+  theme(
+    legend.justification = c(1, 0.1), legend.position = c(1, 0.1),
+    panel.grid.major = element_line(colour="grey", size = 0.2),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14),
+    plot.subtitle = element_text(size = 12, colour = "darkgrey")
+  ) 
+
+ggsave("cor_learning.png", width = 5, height = 5, path = "~/Desktop/plots" )
+
+## 2. Correctness during test phase ##
+# prepare:
+df <- data_summary(dat %>% filter (types == 'Test'), varname="correct", 
+                    groupnames=c("method_adaptive", "participant_number", "condition"))
+df2 <- df %>% filter(method_adaptive == FALSE)
+df3 <- df %>% filter(method_adaptive == TRUE)
+df2$cor_leitner <- df2$correct
+df2$cor_adaptive <- df3$correct
+
+mean_leitner <- mean(df2$cor_leitner)
+mean_adaptive <- mean(df2$cor_adaptive)
+
+# plot:
+ggplot(df2, aes(x = cor_leitner, y = cor_adaptive, color = condition)) + 
+  geom_point(size = 4, na.rm = FALSE, alpha =  0.7) + geom_abline(intercept = 0, slope = 1, colour = 'grey') +   geom_hline(yintercept = mean_adaptive, linetype = "dashed") +
+  geom_vline(xintercept = mean_leitner, linetype = "dashed") +
+  geom_point(x = mean_leitner, y = mean_adaptive, size = 3, color = "black") +
+  coord_fixed() + ylim(0.5,1) + xlim(0.5,1) +
+  theme_classic() + scale_color_manual(values=c('#B22222','#E69F00')) +    
+  labs(title="Proportion of correct responses during test", 
+       x="Using the Leitner algortihm", 
+       y = "Using the SlimStampen algortihm",
+       color = "Learning modality") +
+  theme(
+    legend.justification = c(1, 0.1), legend.position = c(1, 0.1),
+    panel.grid.major = element_line(colour="grey", size = 0.2),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14),
+    plot.subtitle = element_text(size = 12, colour = "darkgrey")
+  ) 
+
+ggsave("cor_test.png", width = 5, height = 5, path = "~/Desktop/plots" )
+
+## 3. Number of items learned, on immediate test ##
+# prepare:
+df=aggregate(correct ~ block + participant_number, data = dat %>% filter (types == 'Test'), sum, na.rm=TRUE)
+df$prop_cor <- df$correct 
+df$method_adaptive <- df$block == 'SST' | df$block == 'SSS'
+df$condition <- df$block == 'LT'  | df$block ==  'SST'
+df2 <- df %>% filter(method_adaptive == FALSE)
+df3 <- df %>% filter(method_adaptive == TRUE)
+df2$cor_leitner <- df2$prop_cor
+df2$cor_adaptive <- df3$prop_cor
+df2[(df2$condition == FALSE),'condition'] <- 'Speaking'
+df2[(df2$condition == TRUE),'condition'] <- 'Typing'
+
+mean_leitner <- mean(df2$cor_leitner)
+mean_adaptive <- mean(df2$cor_adaptive)
+
+# plot:
+ggplot(df2, aes(x = cor_leitner, y = cor_adaptive, color = condition)) +
+  geom_point(size = 4, na.rm = FALSE, alpha =  0.7,  position = position_jitter()) + 
+  geom_hline(yintercept = mean_adaptive, linetype = "dashed") +
+  geom_vline(xintercept = mean_leitner, linetype = "dashed") +
+    geom_point(x = mean_leitner, y = mean_adaptive, size = 3, color = "black") +
+  geom_abline(intercept = 0, slope = 1, colour = 'grey') + coord_fixed() + 
+  ylim(0,23) + xlim(0,23) +
+  theme_classic() +  scale_color_manual(values=c('#228b22','#006994')) + 
+  labs(title="Number of items succesfully recalled immediately", 
+       x="After using the Leitner algortihm", 
+       y = "After using the SlimStampen algortihm",
+       color='Learning modality') +
+  theme(
+    legend.justification = c(1, 0.1), legend.position = c(1, 0.1),
+    panel.grid.major = element_line(colour="grey", size = 0.2),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14),
+    plot.subtitle = element_text(size = 12, colour = "darkgrey")
+  ) 
+
+ggsave("eff_im.png", width = 5, height = 5, path = "~/Desktop/plots" )
+
+## 4. Number of items learned after 4-8 days ##
+# prepare:
+mean_leitner <- mean(long$cor_leitner)
+mean_adaptive <- mean(long$cor_adaptive)
+
+# plot:
+ggplot(long, aes(x = cor_leitner, y = cor_adaptive, color = condition)) +
+  geom_point(size = 4, na.rm = FALSE, alpha =  0.7,  position = position_jitter()) + 
+  geom_hline(yintercept = mean_adaptive, linetype = "dashed") +
+  geom_vline(xintercept = mean_leitner, linetype = "dashed") +
+  geom_point(x = mean_leitner, y = mean_adaptive, size = 3, color = "black") +
+  geom_abline(intercept = 0, slope = 1, colour = 'grey') + coord_fixed() + 
+  ylim(0,23) + xlim(0,23) + # geom_text(aes(label=participant_number),hjust=0, vjust=0) +
+  theme_classic() +  scale_color_manual(values=c('#B22222','#E69F00')) + 
+  labs(title="Number of items succesfully recalled after 4-8 days", 
+       # subtitle = "Based on data from 48 participants, for 2 sessions",
+       x="After using the Leitner algortihm", 
+       y = "After using the SlimStampen algortihm",
+       color='Learning modality') +
+  theme(
+    legend.justification = c(1, 0.1), legend.position = c(1, 0.1),
+    panel.grid.major = element_line(colour="grey", size = 0.2),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14),
+    plot.subtitle = element_text(size = 12, colour = "darkgrey")
+  ) 
+
+
+ggsave("eff_lt.png", width = 5, height = 5, path = "~/Desktop/plots" )
+
+
+## 5. compare typing and speaking 
+# prepare:
+immediate_test$interval <- 'Immediate'
+long_term_retention$interval <- 'Long term'
+correctness <- rbind (immediate_test, long_term_retention)
+
+# plot:
+ggplot(correctness, aes(condition, overall_prop, fill = interval)) +
+  geom_split_violin(alpha = 0.55, color = 'NA') +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5, show.legend = FALSE) + 
+  theme_minimal() + scale_fill_manual(values=c('#B22222', '#E69F00')) +
+  labs(title="Learning efficiency for typing- and speech-based learning", 
+       x="", 
+       y = "Proportion of words successfully recalled",
+       fill='Retention Interval'
+       ) + 
+  theme(
+    panel.grid.major = element_line(colour="grey", size = 0.2),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14),
+    plot.subtitle = element_text(size = 12, colour = "darkgrey"),
+    axis.text.x = element_text(size=12, color = 'black'),
+    axis.text.y = element_text(size=11, color = 'black'),
+    legend.justification = c(1, 0.1), legend.position = c(1, 0.7),
+    legend.background = element_rect(fill="white", size=0.5, color = NA)
+  ) 
+
+
+ggsave("eff_typings_peaking.png", width = 6, height = 6, path = "~/Desktop/plots" )
+
+```
+
+# Plots 2: Response times
+```{r, echo=FALSE}
+options(warn=-1)
+# plot:
+ggplot(dat %>% filter (rt < 12000 & rt > 200), aes(block, rt, fill = types)) +
+  geom_split_violin(alpha = 0.55, color = 'NA') +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5, show.legend = FALSE) + 
+  theme_minimal() + scale_fill_manual(values=c('#383E42', '#E69F00')) +
+  scale_x_discrete(labels = c("SST" = "SS Typing", "SSS" = "SS Speaking", "LS" = "Leitner Speaking", "LT" = "Leitner Typing")) + 
+  labs(title="Response times during test and learning", 
+       x="", 
+       y = "Response time (ms) for correct responses",
+       fill='Experiment phase'
+       ) + 
+  theme(
+    panel.grid.major = element_line(colour="grey", size = 0.2),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14),
+    plot.subtitle = element_text(size = 12, colour = "darkgrey"),
+    axis.text.x = element_text(size=12, color = 'black'),
+    axis.text.y = element_text(size=11, color = 'black'),
+    legend.justification = c(1, 0.1), legend.position = c(1, 0.7),
+    legend.background = element_rect(fill="white", size=0.5, color = NA)
+  ) + scale_y_continuous(breaks = seq(0, 6000, length.out = 11), limits = c(0,6000))
+
+
+ggsave("rts.png", width = 6, height = 6, path = "~/Desktop/plots" )
+
+```
+
+# Plots 3: Effects over time/repetitions
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+options(warn=-1)
+## 1. Response times over time ##
+
+ggplot(data = dat %>% filter (rt < 12000 & correct & time < 11), aes(time, as.numeric(rt), color = block))  + 
+  geom_smooth(formula = y ~ x, method = "loess", span = 0.5) + 
+  theme_classic() + scale_color_manual(values=c('#228b22','#006994', '#383E42', '#E69F00')) + 
+  labs(title="RTs over learning time", 
+       subtitle = "For correct responses only",
+       x="Learning time (minutes)", 
+       y = "Response time (ms)",
+       color='Learning condition') +
+  theme(
+    legend.justification = c(1, 0.1), legend.position = c(1, 0.6),
+    panel.grid.major = element_line(colour="grey", size = 0.2),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14),
+    plot.subtitle = element_text(size = 12, colour = "darkgrey")
+  ) 
+
+
+ggsave("rt_over_time.png", width = 8, height = 4, path = "~/Desktop/plots" )
+
+## Correctness over repetitions
+#prepare:
+
+df_total <- dat
+df_total$repetition <- df_total$repetition - 1
+df_total <- df_total[!is.na(df_total$correct),]  
+df_total <- df_total[!is.na(df_total$repetition),]  
+df_total <- df_total[!is.na(df_total$block),]  
+
+
+
+df_sum <- df_total %>% filter(repetition <=11) %>%
+  group_by(block, repetition) %>%
+  summarise_at(vars(correct), list(name = mean))
+
+ggplot(df_sum, aes(repetition, name, color = block)) + geom_line() + geom_point() + 
+theme_classic() + scale_color_manual(values=c('#228b22','#006994', '#383E42', '#E69F00')) + geom_point(alpha=0.01) +
+  labs(title="Correctness over repetitions", 
+       x="Item repetitions", 
+       y = "Proportion of correct responses",
+       color='Learning condition') +
+  theme(
+    legend.justification = c(1, 0.1), legend.position = c(1, 0.05),
+    panel.grid.major = element_line(colour="grey", size = 0.2),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14),
+    plot.subtitle = element_text(size = 12, colour = "darkgrey")
+  ) + scale_x_continuous(breaks = seq(0, 12, length.out = 13), limits = c(0,12)) + ylim(0,1)
+
+ggsave("cor_over_reps.png", width = 8, height = 4, path = "~/Desktop/plots" )
+```
+
+# Descriptives 
+
+```{r}
+# number of trials:
+summary <- aggregate(id ~ block + types + participant_number, data = dat, FUN = length)
+trial <- aggregate(id ~ block + types, data = summary, FUN = mean)
+trialsd <- aggregate(id ~ block + types, data = summary, FUN = sd)
+
+# correctness:
+summary <- aggregate(correct ~ block + types + participant_number, data = dat, FUN = mean)
+cor <- aggregate(correct ~ block + types, data = summary, FUN = mean)
+corsd <- aggregate(correct ~ block + types, data = summary, FUN = sd)
+
+# rts
+rtclean <- dat
+rtclean$rt[!is.finite(rtclean$rt)] <- NaN              # convert 'Inf' to NaN
+rtclean <- rtclean[!is.na(rtclean$rt),]  
+
+summary <- aggregate(rt ~ block + types + participant_number, data = rtclean, FUN = mean, na.omit = TRUE)
+rts <- aggregate(rt ~ block + types, data = summary, FUN = mean)
+rtsd <- aggregate(rt ~ block + types, data = summary, FUN = sd)
+
+descr <- rts
+
+descr$rt_sd <- rtsd$rt
+descr$cor <- cor$correct
+descr$cor_sd <- corsd$correct
+descr$trial <- trial$id
+descr$trialsd <- trialsd$id
+
+descr
+means
+
+```
+
+# Linear Mixed Effects models for performance during test
+```{r, echo = FALSE}
+
+# recode session to contrast coding:
+dat[(dat$session == 1),'session'] <- -0.5   
+dat[(dat$session == 2),'session'] <- 0.5
+rtclean[(rtclean$session == 1),'session'] <- -0.5   
+rtclean[(rtclean$session == 2),'session'] <- 0.5
+
+# RT on test for speaking, for correct responses:
+rt_speaking <- lmer(rt~ method_adaptive + session + ((1|participant_number) + (1|id)), 
+                    data = rtclean %>% filter(condition == 'Speaking' & types == 'Test' & correct == TRUE))
+summary(rt_speaking)
+
+# RT on test for typing, for correct responses:
+rt_typing <- lmer(rt~ method_adaptive + session + ((1|participant_number) + (1|id)),
+                  data = rtclean %>% filter(condition == 'Typing' & types == 'Test'  & correct == TRUE))
+summary(rt_typing)
+
+# Correctness on test for speaking:
+cor_speaking <- glmer(correct ~ method_adaptive + session + ((1 | participant_number) + ( 1 | id)), 
+                    data = dat %>% filter (condition == 'Speaking' & types == 'Test'), family = 'binomial')
+summary(cor_speaking)
+
+# Correctness on test for typing:
+cor_typing <- glmer(correct ~ method_adaptive + session + ((1 | participant_number) + ( 1 | id)), 
+                    data = dat %>% filter (condition == 'Typing' & types == 'Test'), family = 'binomial')
+summary(cor_typing)
+```
+# Comparing ALBs and efficiency 
+
+``` {r}
+
+# SS vs Leitner, immeidate test:
+ttestBF(x = immediate_test$prop_leitner, y = immediate_test$prop_adaptive, paired=TRUE)
+
+# SS vs Leitner, long-term:
+ttestBF(x = long_term_retention$prop_leitner, y = long_term_retention$prop_adaptive, paired=TRUE)
+
+# Immediate test typing versus speaking:
+im <- full_join(typing_immediate , speaking_immediate, by = 'participant_number')
+im <- na.omit(im)
+ttestBF(x = im$overall_prop.x, y = im$overall_prop.y, paired=TRUE, na.rm = TRUE)
+
+# LT typing versus speaking:
+ttestBF(x = typing_ltr$overall_prop, y = speaking_ltr$overall_prop, paired=FALSE)  # here, a paired test is not possible 
+
+```
